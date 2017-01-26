@@ -1,0 +1,80 @@
+---
+
+- hosts: localhost
+  vars:
+    ov_template: rhel-server
+    ov_profile: bl204-ansible
+    ov_hardware: "CZ36145V03, bay 2"
+
+  tasks:
+
+  - include_vars: ov_credentials.yml
+  - include_vars: satellite_credentials.yml
+
+  - name: Apply rhel-server template
+    oneview_server_profile:
+      state: present
+      data:
+        name: "{{ ov_profile  }}"
+        server_template: "{{ ov_template }}"
+        server_hardware: "{{ ov_hardware }}"
+    delegate_to: localhost
+    environment: "{{ oneview_environment }}"
+    tags: physical-server
+ 
+  - name: Ensure rhel-server template compliance
+    oneview_server_profile:
+      state: compliant
+      data:
+        name: "{{ ov_profile  }}"
+    delegate_to: localhost
+    environment: "{{ oneview_environment }}"
+    tags: physical-server
+ 
+  - name: Get facts about server
+    oneview_server_profile_facts:
+      name: "{{ ov_profile }}"
+    delegate_to: localhost
+    environment: "{{ oneview_environment }}"
+
+  - name: create host in satellite
+    foreman_host:
+      name: "{{ ov_profile }}"
+      hostgroup: RHEL 7 Bare-Metal Server
+      provision_method: build
+      managed: true
+      mac: "{{ server_profiles[0]['connections'][0]['mac'] }}"
+      organization: MCS.HPEMEA.NET
+      location: BBN
+      build: true
+      foreman_host: "{{ foreman_host }}"
+      foreman_port: "{{ foreman_port }}"
+      foreman_user: "{{ foreman_user }}"
+      foreman_pass: "{{ foreman_pass }}"
+    delegate_to: localhost
+    register: host_created
+    tags: content-host
+
+  - name: add host to inventory
+    add_host: 
+      group: "oneview_hosts"
+      hostname: "{{ host_created.host.name }} "
+      ansible_host: "{{ host_created.host.ip }}"
+      ansible_port: 22
+
+  - name: Power on the server hardware
+    oneview_server_hardware:
+      state: power_state_set
+      data:
+          hostname : "{{ server_hardware.name }}"
+          powerStateData:
+              powerState: "On"
+              powerControl: "MomentaryPress"
+    when: server_hardware.powerState == "Off"
+    delegate_to: localhost
+    environment: "{{ oneview_environment }}"
+    tags: physical-server
+
+  - name: Waiting for node to boot  
+    wait_for: port=22 host={{ host_created.host.ip }} timeout=1200  
+    delegate_to: localhost
